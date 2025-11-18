@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    container_name: fastapi-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./fastapi_app:/app/fastapi_app
+    command: uv run gunicorn fastapi_app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --log-level info --reload --threads 2

@@ -7,13 +7,11 @@ from .base import BaseLLM, LLMResponse, LLMState
 
 logger = get_logger(__name__)
 
-# Try to import google-genai (the package in uv.lock)
 try:
     from google import genai
     from google.genai import types
     GENAI_AVAILABLE = True
 except ImportError:
-    # Fallback to google-generativeai if that's what's installed
     try:
         import google.generativeai as genai_legacy
         GENAI_AVAILABLE = False
@@ -162,13 +160,32 @@ class GeminiLLM(BaseLLM):
                 if max_tokens:
                     config.max_output_tokens = max_tokens
 
-                async for chunk in self.client.aio.models.generate_content_stream(
+                stream = await self.client.aio.models.generate_content_stream(
                     model=self.model,
                     contents=prompt,
                     config=config,
-                ):
-                    if chunk.text:
-                        yield chunk.text
+                )
+                
+                async for chunk in stream:
+                    # Handle different chunk structures
+                    text = None
+                    if hasattr(chunk, 'text') and chunk.text:
+                        text = chunk.text
+                    elif hasattr(chunk, 'candidates') and chunk.candidates:
+                        for candidate in chunk.candidates:
+                            if hasattr(candidate, 'content') and candidate.content:
+                                if hasattr(candidate.content, 'parts'):
+                                    for part in candidate.content.parts:
+                                        if hasattr(part, 'text') and part.text:
+                                            text = part.text
+                                            break
+                                elif hasattr(candidate.content, 'text'):
+                                    text = candidate.content.text
+                            if text:
+                                break
+                    
+                    if text:
+                        yield text
             else:
                 # Legacy streaming
                 generation_config = {
@@ -185,13 +202,23 @@ class GeminiLLM(BaseLLM):
                     stream=True,
                 )
                 async for chunk in response:
-                    if chunk.text:
-                        yield chunk.text
+                    text = None
+                    if hasattr(chunk, 'text') and chunk.text:
+                        text = chunk.text
+                    elif hasattr(chunk, 'parts'):
+                        for part in chunk.parts:
+                            if hasattr(part, 'text') and part.text:
+                                text = part.text
+                                break
+                    
+                    if text:
+                        yield text
 
             if self.state != LLMState.HEALTHY:
                 self._set_state(LLMState.HEALTHY)
 
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"Gemini streaming error: {error_msg}", exc_info=True)
             self._set_state(LLMState.UNHEALTHY, error_msg)
             yield f"\n\n[Gemini Error: {error_msg}]"

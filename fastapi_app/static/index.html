@@ -670,7 +670,6 @@
             document.getElementById('status').style.display = 'none';
         });
 
-        // Form submission
         document.getElementById('llmForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -685,7 +684,6 @@
             const metadataEl = document.getElementById('metadata');
             const statusEl = document.getElementById('status');
 
-            // Disable button and show loading
             generateBtn.disabled = true;
             generateBtn.innerHTML = '<span class="loading"></span>Generating...';
             responseEl.textContent = '';
@@ -701,30 +699,30 @@
             document.getElementById('statTimeToFirst').textContent = '-';
             document.getElementById('statElapsedTime').textContent = '-';
 
-            // Use REST API for generation requests
-            try {
-                const requestBody = {
-                    provider: provider,
-                    prompt: prompt,
-                    temperature: temperature,
-                    stream: stream,
-                    max_tokens: maxTokens ? parseInt(maxTokens) : null
-                };
+            const requestBody = {
+                provider: provider,
+                prompt: prompt,
+                temperature: temperature,
+                stream: stream,  // This is now properly handled by backend
+                max_tokens: maxTokens ? parseInt(maxTokens) : null
+            };
 
+            try {
                 if (stream) {
-                    // Handle streaming response via REST
+                    // FIX: Use /stream endpoint OR /generate with stream=true
+                    // The backend now routes streaming properly
                     const response = await fetch('/api/llm/generate', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(requestBody)
                     });
 
                     if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
+                        const error = await response.json();
+                        throw new Error(error.detail || `HTTP error! status: ${response.status}`);
                     }
 
+                    // FIX: Properly parse SSE format
                     const reader = response.body.getReader();
                     const decoder = new TextDecoder();
                     let buffer = '';
@@ -739,26 +737,39 @@
 
                         for (const line of lines) {
                             if (line.startsWith('data: ')) {
-                                const data = line.slice(6);
-                                if (data === '[DONE]') {
-                                    continue;
+                                const dataStr = line.slice(6).trim();
+                                if (!dataStr || dataStr === '[DONE]') continue;
+                                
+                                try {
+                                    const data = JSON.parse(dataStr);
+                                    
+                                    if (data.error) {
+                                        responseEl.textContent += `\n[Error: ${data.error}]`;
+                                    } else if (data.delta) {
+                                        responseEl.textContent += data.delta;
+                                        responseEl.scrollTop = responseEl.scrollHeight;
+                                    } else if (data.done) {
+                                        // Stream complete
+                                        showStatus('Response generated successfully!', 'success');
+                                    }
+                                } catch (parseErr) {
+                                    console.warn('Failed to parse SSE data:', dataStr);
                                 }
-                                responseEl.textContent += data;
-                                responseEl.scrollTop = responseEl.scrollHeight;
                             }
                         }
                     }
 
-                    showStatus('Response generated successfully!', 'success');
                     generateBtn.disabled = false;
                     generateBtn.textContent = 'Generate Response';
+                    if (!responseEl.textContent) {
+                        showStatus('No response received', 'error');
+                    }
+
                 } else {
-                    // Handle regular response via REST
+                    // Non-streaming request
                     const response = await fetch('/api/llm/generate', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(requestBody)
                     });
 
@@ -770,28 +781,21 @@
                     const data = await response.json();
                     responseEl.textContent = data.content;
 
-                    // Show metadata if available
+                    // Show metadata
                     if (data.usage || data.metadata || data.provider || data.model) {
                         let metadataHtml = '';
-                        if (data.provider) {
-                            let providerClass = 'groq';
-                            if (data.provider === 'groq') providerClass = 'groq';
-                            metadataHtml += `<div class="metadata-item"><strong>Provider:</strong> <span class="provider-badge ${providerClass}">${data.provider}</span></div>`;
-                        }
                         if (data.model) {
                             metadataHtml += `<div class="metadata-item"><strong>Model:</strong> ${data.model}</div>`;
                         }
                         if (data.usage) {
                             metadataHtml += `<div class="metadata-item"><strong>Usage:</strong> `;
-                            if (data.usage.prompt_tokens) metadataHtml += `Prompt: ${data.usage.prompt_tokens} tokens, `;
-                            if (data.usage.completion_tokens) metadataHtml += `Completion: ${data.usage.completion_tokens} tokens, `;
-                            if (data.usage.total_tokens) metadataHtml += `Total: ${data.usage.total_tokens} tokens`;
+                            if (data.usage.prompt_tokens) metadataHtml += `Prompt: ${data.usage.prompt_tokens}, `;
+                            if (data.usage.completion_tokens) metadataHtml += `Completion: ${data.usage.completion_tokens}, `;
+                            if (data.usage.total_tokens) metadataHtml += `Total: ${data.usage.total_tokens}`;
                             metadataHtml += `</div>`;
                         }
-                        if (data.metadata) {
-                            if (data.metadata.finish_reason) {
-                                metadataHtml += `<div class="metadata-item"><strong>Finish Reason:</strong> ${data.metadata.finish_reason}</div>`;
-                            }
+                        if (data.metadata?.finish_reason) {
+                            metadataHtml += `<div class="metadata-item"><strong>Finish:</strong> ${data.metadata.finish_reason}</div>`;
                         }
                         metadataEl.innerHTML = metadataHtml;
                         metadataEl.style.display = 'block';

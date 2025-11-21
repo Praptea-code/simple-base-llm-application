@@ -1,9 +1,9 @@
-"""LLM API routes"""
+"""LLM API routes - FIXED VERSION"""
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, Set, Literal
+from typing import Optional, Set
 import time
 import asyncio
 import json
@@ -15,10 +15,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/llm", tags=["LLM"])
 
-# Single source of truth — all providers (openai, gemini, groq) are here automatically
 llm_instances = PROVIDERS
-
-# WebSocket connections for live stats
 stats_websockets: Set[WebSocket] = set()
 
 
@@ -26,10 +23,8 @@ async def broadcast_stats(stats: dict):
     """Send real-time generation stats to all connected frontend clients"""
     if not stats_websockets:
         return
-
     message = {"type": "generation_stats", **stats}
     disconnected = set()
-
     for ws in stats_websockets:
         try:
             if ws.client_state.name == "CONNECTED":
@@ -38,7 +33,6 @@ async def broadcast_stats(stats: dict):
                 disconnected.add(ws)
         except Exception:
             disconnected.add(ws)
-
     stats_websockets.difference_update(disconnected)
 
 
@@ -54,6 +48,7 @@ class GenerateRequest(BaseModel):
     provider: str = "groq"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = None
+    stream: bool = False  # FIX: Added stream parameter
 
 
 @router.get("/providers")
@@ -75,21 +70,19 @@ async def list_providers():
 
 @router.get("/health")
 async def llm_health(provider: Optional[str] = None, check: bool = True):
-    """Get health status — called by main.py on startup and by UI"""
+    """Get health status"""
     if provider:
         if provider not in llm_instances:
             raise HTTPException(status_code=404, detail="Provider not found")
         llm = llm_instances[provider]
         if check:
             await llm.check_health()
-        state = llm.state
         return {
             "provider": provider,
-            "state": state.value,
+            "state": llm.state.value,
             "error_message": llm.error_message,
         }
 
-    # All providers
     if check:
         await perform_health_checks_for_all_providers()
 
@@ -109,43 +102,52 @@ async def llm_health(provider: Optional[str] = None, check: bool = True):
             all_healthy = False
 
     status = "healthy" if all_healthy and any_configured else "unhealthy" if any_configured else "not_configured"
-
     return {"status": status, "providers": results}
 
 
 @router.post("/generate")
 async def generate(request: GenerateRequest):
+    """Generate text - handles both streaming and non-streaming"""
     llm = get_llm_instance(request.provider)
 
     if not llm.is_configured():
         raise HTTPException(status_code=503, detail=f"Provider '{request.provider}' not configured (missing API key)")
 
+    # FIX: Route to streaming if requested
+    if request.stream:
+        return await stream_response(request)
+
     start_time = time.time()
-    response = await llm.generate(
-        prompt=request.prompt,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-    )
-    elapsed = time.time() - start_time
+    try:
+        response = await llm.generate(
+            prompt=request.prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        elapsed = time.time() - start_time
 
-    # Rough stats for UI
-    approx_tokens = len(response.content.split())
-    await broadcast_stats({
-        "provider": request.provider,
-        "tokens": approx_tokens,
-        "total_time": round(elapsed, 2),
-        "tokens_per_second": round(approx_tokens / elapsed if elapsed > 0 else 0, 2),
-    })
+        # Update state on success
+        if llm.state != LLMState.HEALTHY:
+            llm._set_state(LLMState.HEALTHY)
 
-    return response
+        approx_tokens = len(response.content.split())
+        await broadcast_stats({
+            "provider": request.provider,
+            "tokens": approx_tokens,
+            "total_time": round(elapsed, 2),
+            "tokens_per_second": round(approx_tokens / elapsed if elapsed > 0 else 0, 2),
+        })
+
+        return response
+
+    except Exception as e:
+        llm._set_state(LLMState.UNHEALTHY, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/stream")
-async def stream(request: GenerateRequest):
+async def stream_response(request: GenerateRequest):
+    """Internal streaming handler"""
     llm = get_llm_instance(request.provider)
-
-    if not llm.is_configured():
-        raise HTTPException(status_code=503, detail=f"Provider '{request.provider}' not configured")
 
     async def event_generator():
         start = time.time()
@@ -153,64 +155,78 @@ async def stream(request: GenerateRequest):
         full_text = ""
         token_count = 0
 
-        async for chunk in llm.generate_stream(
-            prompt=request.prompt,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        ):
-            if chunk.strip():
-                full_text += chunk
-                token_count += 1
+        try:
+            async for chunk in llm.generate_stream(
+                prompt=request.prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+            ):
+                if chunk:
+                    full_text += chunk
+                    token_count += 1
 
-                if first_token:
-                    ttft = time.time() - start
-                    await broadcast_stats({
-                        "provider": request.provider,
-                        "time_to_first_token": round(ttft, 3),
-                    })
-                    first_token = False
+                    if first_token:
+                        ttft = time.time() - start
+                        await broadcast_stats({
+                            "provider": request.provider,
+                            "time_to_first_token": round(ttft, 3),
+                        })
+                        first_token = False
 
-                yield f"data: {json.dumps({'delta': chunk})}\n\n"
+                    yield f"data: {json.dumps({'delta': chunk})}\n\n"
 
-        total_time = time.time() - start
-        tps = token_count / total_time if total_time > 0 else 0
+            total_time = time.time() - start
+            tps = token_count / total_time if total_time > 0 else 0
 
-        await broadcast_stats({
-            "provider": request.provider,
-            "tokens": token_count,
-            "total_time": round(total_time, 2),
-            "tokens_per_second": round(tps, 2),
-        })
+            # Update state on success
+            if llm.state != LLMState.HEALTHY:
+                llm._set_state(LLMState.HEALTHY)
 
-        yield f"data: {json.dumps({'done': True, 'content': full_text})}\n\n"
+            await broadcast_stats({
+                "provider": request.provider,
+                "tokens": token_count,
+                "total_time": round(total_time, 2),
+                "tokens_per_second": round(tps, 2),
+            })
+
+            yield f"data: {json.dumps({'done': True, 'content': full_text})}\n\n"
+
+        except Exception as e:
+            llm._set_state(LLMState.UNHEALTHY, str(e))
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/stream")
+async def stream(request: GenerateRequest):
+    """Dedicated streaming endpoint"""
+    llm = get_llm_instance(request.provider)
+    if not llm.is_configured():
+        raise HTTPException(status_code=503, detail=f"Provider '{request.provider}' not configured")
+    request.stream = True
+    return await stream_response(request)
 
 
 @router.websocket("/ws/status")
 async def websocket_status(websocket: WebSocket):
     await websocket.accept()
     stats_websockets.add(websocket)
-
     try:
-        # Send current provider status immediately
         await push_all_providers_status(websocket)
-
-        # Keep connection alive and push updates if health changes
         while True:
-            data = await websocket.receive_text()  # keep-alive
-
+            await websocket.receive_text()
     except WebSocketDisconnect:
         stats_websockets.discard(websocket)
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         stats_websockets.discard(websocket)
 
+
 async def perform_health_checks_for_all_providers():
     async def check_one(name: str, llm: BaseLLM):
         if llm.is_configured() and llm.state != LLMState.HEALTHY:
             await llm.check_health()
-
     tasks = [check_one(name, llm) for name, llm in llm_instances.items()]
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -225,14 +241,17 @@ async def push_all_providers_status(websocket: WebSocket):
             "model": llm.model,
             "error_message": llm.error_message if state != LLMState.HEALTHY else None
         }
-
     overall = "healthy" if all(v["state"] == "healthy" for v in results.values()) else "partial"
-
     try:
-        await websocket.send_json({
-            "type": "status",
-            "status": overall,
-            "providers": results
-        })
+        await websocket.send_json({"type": "status", "status": overall, "providers": results})
     except:
-        pass  # client disconnected
+        pass
+
+
+async def close_all_websockets():
+    for ws in list(stats_websockets):
+        try:
+            await ws.close()
+        except:
+            pass
+    stats_websockets.clear()

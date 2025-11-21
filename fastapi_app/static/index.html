@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Interface - Groq</title>
+    <title>LLM Interface</title>
     <style>
         * {
             margin: 0;
@@ -409,7 +409,7 @@
     <div class="container">
         <div class="header">
             <h1>🤖 LLM Interface</h1>
-            <p>Interact with Groq AI models</p>
+            <p>Interact with OpenAI and Gemini models</p>
         </div>
 
         <div class="content">
@@ -911,6 +911,7 @@
                 // Update temperature max based on provider
                 const provider = e.target.value;
                 const tempSlider = document.getElementById('temperature');
+    
                 if (provider === 'groq') {
                     tempSlider.max = '2';
                     if (parseFloat(tempSlider.value) > 2) {

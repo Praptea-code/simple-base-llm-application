@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from .config import settings
 from .logging_config import setup_logging, get_logger
 from .routes import llm
+from fastapi_app.routes import documents
 
 # Setup logging
 setup_logging(
@@ -49,6 +50,7 @@ app = FastAPI(title="FastAPI LLM App", version="1.0.0", lifespan=lifespan)
 
 # Include LLM routes
 app.include_router(llm.router)
+app.include_router(documents.router, prefix="/api/documents")
 
 # Serve static files (HTML UI)
 static_dir = os.path.join(os.path.dirname(__file__), "static")

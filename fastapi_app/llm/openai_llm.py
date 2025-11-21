@@ -1,4 +1,4 @@
-"""Groq LLM implementation using OpenAI-compatible API"""
+"""OpenAI LLM implementation"""
 
 from typing import Optional, AsyncIterator
 from openai import AsyncOpenAI
@@ -9,41 +9,31 @@ from .base import BaseLLM, LLMResponse, LLMState
 logger = get_logger(__name__)
 
 
-class GroqLLM(BaseLLM):
-    """Groq LLM provider implementation using OpenAI-compatible API"""
+class OpenAI_LLM(BaseLLM):
+    """OpenAI LLM provider implementation"""
 
     def __init__(
         self,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "gpt-4o-mini",
         api_key: Optional[str] = None,
         **kwargs,
     ):
-        """
-        Initialize Groq LLM
-
-        Args:
-            model: Groq model name (default: "llama-3.1-70b-versatile")
-            api_key: Groq API key (defaults to GROQ_API_KEY from settings)
-            **kwargs: Additional Groq configuration
-        """
-        api_key = api_key or getattr(settings, "groq_api_key", None)
+        """Initialize OpenAI LLM"""
+        # Get API key from settings if not provided
+        api_key = api_key or getattr(settings, "openai_api_key", None)
         super().__init__(model=model, api_key=api_key, **kwargs)
         
         if not api_key:
-            logger.warning("GROQ_API_KEY not configured")
-            self._set_state(LLMState.NOT_CONFIGURED, "GROQ_API_KEY not configured")
+            logger.warning("OPENAI_API_KEY not configured")
+            self._set_state(LLMState.NOT_CONFIGURED, "OPENAI_API_KEY not configured")
         else:
             try:
-                # Initialize OpenAI-compatible client with Groq's base URL
-                self.client = AsyncOpenAI(
-                    api_key=self.api_key,
-                    base_url="https://api.groq.com/openai/v1"
-                )
-                logger.info(f"Groq LLM client initialized with model: {model}")
-                # Set to unhealthy initially, will be validated on first use or health check
+                # Initialize async OpenAI client
+                self.client = AsyncOpenAI(api_key=self.api_key)
+                logger.info(f"OpenAI LLM client initialized with model: {model}")
                 self._set_state(LLMState.UNHEALTHY, "Not yet validated")
             except Exception as e:
-                logger.error(f"Failed to initialize Groq client: {e}")
+                logger.error(f"Failed to initialize OpenAI client: {e}")
                 self._set_state(LLMState.UNHEALTHY, str(e))
 
     async def generate(
@@ -53,19 +43,7 @@ class GroqLLM(BaseLLM):
         max_tokens: Optional[int] = None,
         **kwargs,
     ) -> LLMResponse:
-        """
-        Generate a response using Groq
-
-        Args:
-            prompt: Input prompt/text
-            temperature: Sampling temperature (0.0 to 2.0)
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional Groq parameters
-
-        Returns:
-            LLMResponse object with the generated content
-        """
-        # Prepare generation parameters
+        """Generate a response using OpenAI"""
         params = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -76,10 +54,10 @@ class GroqLLM(BaseLLM):
         if max_tokens:
             params["max_tokens"] = max_tokens
 
-        # Generate response using async API
+        # Use async API
         response = await self.client.chat.completions.create(**params)
 
-        # Extract usage information
+        # Extract usage
         usage = None
         if response.usage:
             usage = {
@@ -102,9 +80,7 @@ class GroqLLM(BaseLLM):
             content=content,
             model=response.model,
             usage=usage,
-            metadata={
-                "finish_reason": finish_reason,
-            },
+            metadata={"finish_reason": finish_reason},
         )
 
     async def generate_stream(
@@ -114,19 +90,7 @@ class GroqLLM(BaseLLM):
         max_tokens: Optional[int] = None,
         **kwargs,
     ) -> AsyncIterator[str]:
-        """
-        Generate a streaming response using Groq
-
-        Args:
-            prompt: Input prompt/text
-            temperature: Sampling temperature (0.0 to 2.0)
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional Groq parameters
-
-        Yields:
-            Chunks of the generated response
-        """
-        # Prepare generation parameters
+        """Generate a streaming response using OpenAI"""
         params = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -138,18 +102,10 @@ class GroqLLM(BaseLLM):
         if max_tokens:
             params["max_tokens"] = max_tokens
 
-        # Generate streaming response
         stream = await self.client.chat.completions.create(**params)
 
-        # Yield chunks asynchronously
         async for chunk in stream:
             if chunk.choices and len(chunk.choices) > 0:
                 delta = chunk.choices[0].delta
                 if delta.content:
                     yield delta.content
-
-    def validate_config(self) -> LLMState:
-        """Validate Groq configuration"""
-        return super().validate_config()
-
-

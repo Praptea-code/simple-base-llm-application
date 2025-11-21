@@ -1,11 +1,17 @@
 """Application configuration using Pydantic Settings"""
-
+# pyright: reportMissingImports=false
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
+
+    # OpenAI LLM Configuration
+    openai_api_key: Optional[str] = None
+
+    # Gemini LLM Configuration
+    gemini_api_key: Optional[str] = None
 
     # Groq LLM Configuration
     groq_api_key: Optional[str] = None

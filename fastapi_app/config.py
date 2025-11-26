@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Groq LLM Configuration
     groq_api_key: Optional[str] = None
 
+    # Redis Configuration
+    redis_url: str = "redis://localhost:6379"
+
     # Logging Configuration
     log_level: str = "INFO"
     log_file: Optional[str] = "app.log"

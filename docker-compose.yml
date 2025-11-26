@@ -1,4 +1,18 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: fastapi-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build: .
     container_name: fastapi-app
@@ -6,6 +20,14 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./fastapi_app:/app/fastapi_app
+    depends_on:
+      redis:
+        condition: service_healthy
     command: uv run gunicorn fastapi_app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --log-level info --reload --threads 2
+
+volumes:
+  redis_data:

@@ -71,18 +71,7 @@ class BaseLLM(ABC):
         max_tokens: Optional[int] = None,
         **kwargs
     ) -> LLMResponse:
-        """
-        Generate a response from the LLM
-        
-        Args:
-            prompt: Input prompt/text
-            temperature: Sampling temperature (0.0 to 1.0)
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional provider-specific parameters
-            
-        Returns:
-            LLMResponse object with the generated content
-        """
+
         pass
     
     @abstractmethod
@@ -93,18 +82,7 @@ class BaseLLM(ABC):
         max_tokens: Optional[int] = None,
         **kwargs
     ):
-        """
-        Generate a streaming response from the LLM
-        
-        Args:
-            prompt: Input prompt/text
-            temperature: Sampling temperature (0.0 to 1.0)
-            max_tokens: Maximum tokens to generate
-            **kwargs: Additional provider-specific parameters
-            
-        Yields:
-            Chunks of the generated response
-        """
+ 
         pass
     
     def validate_config(self) -> LLMState:

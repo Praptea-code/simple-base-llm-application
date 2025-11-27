@@ -8,6 +8,7 @@ import json
 import uuid
 from datetime import datetime
 import redis.asyncio as redis
+from enum import Enum
 
 from fastapi_app.config import settings
 from fastapi_app.logging_config import get_logger
@@ -192,7 +193,29 @@ class RedisDocumentStore:
 
 # Global instance
 document_store = RedisDocumentStore()
+document_sessions = {}
 
+class DocumentType(str, Enum):
+    """Types of documents that can be created"""
+    RUNBOOK = "runbook"
+    TROUBLESHOOTING = "troubleshooting"
+    ARCHITECTURE = "architecture"
+    INCIDENT_REPORT = "incident_report"
+    SOP = "sop"  # Standard Operating Procedure
+
+class CreateDocumentRequest(BaseModel):
+    """Request to create a new document"""
+    document_type: DocumentType
+    title: str = Field(..., min_length=3, max_length=200)
+    initial_prompt: str = Field(..., min_length=10)
+    provider: str = Field(default="gemini")
+    doc_ids: Optional[List[str]] = Field(default=None, description="Specific documents to reference")
+
+class ClarificationRequest(BaseModel):
+    """Request for clarification during document creation"""
+    session_id: str
+    answer: str
+    provider: str = Field(default="gemini")
 
 class QueryRequest(BaseModel):
     """Request model for document Q&A"""
@@ -355,3 +378,328 @@ async def search_documents(
         "results": results,
         "total_found": len(results)
     }
+@router.post("/create-document/start")
+async def start_document_creation(request: CreateDocumentRequest):
+    """
+    Start an interactive document creation session.
+    The AI will ask clarifying questions before generating the document.
+    """
+    documents = await document_store.list_documents()
+    
+    if not documents:
+        raise HTTPException(
+            status_code=400, 
+            detail="No knowledge base documents available. Please upload documents first."
+        )
+    
+    # Create session ID
+    session_id = str(uuid.uuid4())[:12]
+    
+    # Get relevant context from KB
+    search_docs = request.doc_ids if request.doc_ids else None
+    relevant_chunks = await document_store.search_chunks(
+        request.initial_prompt, 
+        search_docs, 
+        top_k=10
+    )
+    
+    # Build context
+    context_parts = []
+    sources = []
+    for chunk in relevant_chunks:
+        context_parts.append(f"[{chunk['filename']}]:\n{chunk['content']}")
+        source_info = {"filename": chunk["filename"], "doc_id": chunk["doc_id"]}
+        if source_info not in sources:
+            sources.append(source_info)
+    
+    context = "\n\n---\n\n".join(context_parts)
+    
+    # Create clarification prompt
+    clarification_prompt = f"""You are an expert SRE/DevOps documentation assistant. A user wants to create a {request.document_type.value} document.
+
+KNOWLEDGE BASE CONTEXT:
+{context}
+
+USER'S REQUEST:
+{request.title}
+{request.initial_prompt}
+
+YOUR TASK:
+Based ONLY on the knowledge base context provided above, ask 3-5 specific clarifying questions to gather the information needed to create a comprehensive {request.document_type.value} document.
+
+CRITICAL RULES:
+1. ONLY ask questions about information that exists in the knowledge base context
+2. If the knowledge base lacks necessary information, explicitly state what's missing
+3. DO NOT assume or invent information
+4. Ask specific, technical questions relevant to {request.document_type.value}
+5. Focus on gaps that need to be filled from the existing knowledge base
+
+Format your response as:
+ANALYSIS: [Brief assessment of available information]
+QUESTIONS:
+1. [Question 1]
+2. [Question 2]
+3. [Question 3]
+[etc.]
+
+MISSING: [List any critical information not found in the knowledge base]"""
+
+    try:
+        from fastapi_app.llm import PROVIDERS
+        
+        if request.provider not in PROVIDERS:
+            available = ", ".join(PROVIDERS.keys())
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Provider '{request.provider}' not available. Choose from: {available}"
+            )
+        
+        llm = PROVIDERS[request.provider]
+        
+        if not llm.is_configured():
+            raise HTTPException(
+                status_code=503, 
+                detail=f"Provider '{request.provider}' not configured"
+            )
+        
+        response = await llm.generate(prompt=clarification_prompt, temperature=0.3)
+        clarification_response = response.content if hasattr(response, 'content') else str(response)
+        
+        # Store session
+        document_sessions[session_id] = {
+            "document_type": request.document_type,
+            "title": request.title,
+            "initial_prompt": request.initial_prompt,
+            "context": context,
+            "sources": sources,
+            "clarifications": [],
+            "provider": request.provider,
+            "created_at": datetime.now().isoformat()
+        }
+        
+        return {
+            "session_id": session_id,
+            "status": "awaiting_clarification",
+            "questions": clarification_response,
+            "sources_available": sources,
+            "message": "Please answer the clarifying questions to proceed with document creation."
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting document creation: {str(e)}")
+
+
+@router.post("/create-document/clarify")
+async def provide_clarification(request: ClarificationRequest):
+    """
+    Provide answers to clarifying questions.
+    The AI will determine if more questions are needed or if it can generate the document.
+    """
+    if request.session_id not in document_sessions:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    session = document_sessions[request.session_id]
+    session["clarifications"].append(request.answer)
+    
+    # Ask AI if we have enough information
+    verification_prompt = f"""You are an expert SRE/DevOps documentation assistant.
+
+DOCUMENT TYPE: {session['document_type'].value}
+TITLE: {session['title']}
+ORIGINAL REQUEST: {session['initial_prompt']}
+
+KNOWLEDGE BASE CONTEXT:
+{session['context']}
+
+USER'S CLARIFICATIONS SO FAR:
+{chr(10).join(f"{i+1}. {c}" for i, c in enumerate(session['clarifications']))}
+
+YOUR TASK:
+Determine if you have enough information from the knowledge base and clarifications to create a complete {session['document_type'].value} document.
+
+RESPOND IN THIS FORMAT:
+STATUS: [READY or NEED_MORE]
+REASONING: [Explain what you have or what's missing]
+ADDITIONAL_QUESTIONS: [If NEED_MORE, list specific questions. If READY, write "None"]
+MISSING_FROM_KB: [List any critical information not in the knowledge base]"""
+
+    try:
+        from fastapi_app.llm import PROVIDERS
+        
+        llm = PROVIDERS[request.provider]
+        response = await llm.generate(prompt=verification_prompt, temperature=0.3)
+        verification_response = response.content if hasattr(response, 'content') else str(response)
+        
+        # Parse response to determine status
+        if "STATUS: READY" in verification_response:
+            return {
+                "session_id": request.session_id,
+                "status": "ready_to_generate",
+                "analysis": verification_response,
+                "message": "Ready to generate document. Call /create-document/generate to create the final document."
+            }
+        else:
+            return {
+                "session_id": request.session_id,
+                "status": "need_more_info",
+                "questions": verification_response,
+                "message": "Please provide additional information."
+            }
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing clarification: {str(e)}")
+
+
+@router.post("/create-document/generate")
+async def generate_document(session_id: str, provider: str = "gemini"):
+    """
+    Generate the final document based on the knowledge base and clarifications.
+    This will ONLY use information from the KB - no hallucinations.
+    """
+    if session_id not in document_sessions:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    session = document_sessions[session_id]
+    
+    # Create document generation prompt
+    document_prompt = f"""You are an expert SRE/DevOps documentation assistant. Create a comprehensive {session['document_type'].value} document.
+
+DOCUMENT TITLE: {session['title']}
+
+ORIGINAL REQUEST: {session['initial_prompt']}
+
+KNOWLEDGE BASE CONTEXT (YOUR ONLY SOURCE OF TRUTH):
+{session['context']}
+
+USER'S CLARIFICATIONS:
+{chr(10).join(f"{i+1}. {c}" for i, c in enumerate(session['clarifications']))}
+
+YOUR TASK:
+Create a professional {session['document_type'].value} document using ONLY information from the knowledge base context above.
+
+CRITICAL RULES:
+1. USE ONLY factual information from the knowledge base - NO assumptions or inventions
+2. If information is missing, explicitly state "Information not available in knowledge base"
+3. Cite which documents information comes from using [Source: filename]
+4. Be specific and technical - this is for professional SREs/DevOps engineers
+5. Include clear sections appropriate for a {session['document_type'].value}
+6. DO NOT hallucinate or make up information
+
+FORMAT FOR {session['document_type'].value.upper()}:
+{get_document_template(session['document_type'])}
+
+Generate the document now, following the format above."""
+
+    try:
+        from fastapi_app.llm import PROVIDERS
+        
+        llm = PROVIDERS[provider]
+        response = await llm.generate(prompt=document_prompt, temperature=0.2, max_tokens=2000)
+        generated_doc = response.content if hasattr(response, 'content') else str(response)
+        
+        # Store generated document in KB
+        final_doc = f"""# {session['title']}
+
+**Document Type:** {session['document_type'].value}
+**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Sources:** {', '.join(s['filename'] for s in session['sources'])}
+
+---
+
+{generated_doc}
+
+---
+
+**Knowledge Base Sources Used:**
+{chr(10).join(f"- {s['filename']}" for s in session['sources'])}
+"""
+        
+        # Save to document store
+        result = await document_store.store_document(
+            f"{session['title']}.txt",
+            final_doc
+        )
+        
+        # Clean up session
+        del document_sessions[session_id]
+        
+        return {
+            "status": "completed",
+            "document": generated_doc,
+            "doc_id": result["doc_id"],
+            "sources": session['sources'],
+            "message": "Document created successfully and added to knowledge base."
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating document: {str(e)}")
+
+
+def get_document_template(doc_type: DocumentType) -> str:
+    """Returns the appropriate template structure for each document type"""
+    templates = {
+        DocumentType.RUNBOOK: """
+# Title
+## Overview
+## Prerequisites
+## Step-by-Step Procedure
+## Rollback Procedure
+## Validation Steps
+## Troubleshooting
+## References""",
+        
+        DocumentType.TROUBLESHOOTING: """
+# Title
+## Problem Description
+## Symptoms
+## Root Cause Analysis
+## Resolution Steps
+## Prevention
+## Related Issues
+## References""",
+        
+        DocumentType.ARCHITECTURE: """
+# Title
+## Overview
+## System Components
+## Data Flow
+## Infrastructure Details
+## Security Considerations
+## Scalability & Performance
+## Monitoring & Observability
+## References""",
+        
+        DocumentType.INCIDENT_REPORT: """
+# Title
+## Incident Summary
+## Timeline
+## Impact
+## Root Cause
+## Resolution
+## Action Items
+## Lessons Learned
+## References""",
+        
+        DocumentType.SOP: """
+# Title
+## Purpose
+## Scope
+## Responsibilities
+## Procedure
+## Frequency
+## Documentation Requirements
+## Review & Updates
+## References"""
+    }
+    return templates.get(doc_type, "")
+
+
+@router.delete("/create-document/session/{session_id}")
+async def cancel_document_session(session_id: str):
+    """Cancel an ongoing document creation session"""
+    if session_id in document_sessions:
+        del document_sessions[session_id]
+        return {"message": "Session cancelled successfully"}
+    raise HTTPException(status_code=404, detail="Session not found")

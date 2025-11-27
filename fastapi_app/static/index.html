@@ -1,573 +1,1074 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Chat with Knowledge Base</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: grid;
-            grid-template-columns: 300px 1fr;
-            gap: 20px;
-            height: calc(100vh - 40px);
-        }
-
-        .sidebar {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            overflow-y: auto;
-        }
-
-        .main-content {
-            background: white;
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            display: flex;
-            flex-direction: column;
-        }
-
-        h1 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 1.8em;
-        }
-
-        h2 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 1.3em;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
-        }
-
-        .upload-section {
-            margin-bottom: 25px;
-        }
-
-        .file-input-wrapper {
-            position: relative;
-            overflow: hidden;
-            display: inline-block;
-            width: 100%;
-            margin-bottom: 10px;
-        }
-
-        .file-input-wrapper input[type=file] {
-            position: absolute;
-            left: -9999px;
-        }
-
-        .file-input-label {
-            display: block;
-            padding: 12px;
-            background: #667eea;
-            color: white;
-            text-align: center;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-
-        .file-input-label:hover {
-            background: #5568d3;
-        }
-
-        .upload-btn {
-            width: 100%;
-            padding: 12px;
-            background: #764ba2;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background 0.3s;
-        }
-
-        .upload-btn:hover:not(:disabled) {
-            background: #653a8e;
-        }
-
-        .upload-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .documents-list {
-            max-height: calc(100vh - 400px);
-            overflow-y: auto;
-        }
-
-        .document-item {
-            padding: 12px;
-            margin-bottom: 10px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            border-left: 3px solid #667eea;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .document-item:hover {
-            background: #e9ecef;
-            transform: translateX(5px);
-        }
-
-        .document-item.selected {
-            background: #e3e7ff;
-            border-left-color: #764ba2;
-        }
-
-        .document-name {
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 5px;
-        }
-
-        .document-meta {
-            font-size: 12px;
-            color: #666;
-        }
-
-        .delete-btn {
-            float: right;
-            padding: 4px 8px;
-            background: #dc3545;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        .delete-btn:hover {
-            background: #c82333;
-        }
-
-        .chat-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .chat-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
-        }
-
-        .provider-select {
-            padding: 10px;
-            border: 2px solid #667eea;
-            border-radius: 8px;
-            font-size: 14px;
-            cursor: pointer;
-        }
-
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .message {
-            margin-bottom: 20px;
-            padding: 15px;
-            border-radius: 8px;
-            max-width: 80%;
-            animation: fadeIn 0.3s;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message.user {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            margin-left: auto;
-        }
-
-        .message.assistant {
-            background: white;
-            border: 2px solid #e9ecef;
-        }
-
-        .message-content {
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            line-height: 1.6;
-        }
-
-        .message-sources {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid rgba(0,0,0,0.1);
-            font-size: 12px;
-            color: #666;
-        }
-
-        .input-container {
-            display: flex;
-            gap: 10px;
-        }
-
-        .chat-input {
-            flex: 1;
-            padding: 15px;
-            border: 2px solid #667eea;
-            border-radius: 8px;
-            font-size: 16px;
-            font-family: inherit;
-        }
-
-        .send-btn {
-            padding: 15px 30px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            transition: transform 0.2s;
-        }
-
-        .send-btn:hover:not(:disabled) {
-            transform: scale(1.05);
-        }
-
-        .send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .status-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-
-        .status-indicator.connected {
-            background: #28a745;
-        }
-
-        .status-indicator.disconnected {
-            background: #dc3545;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-
-        .toggle-kb {
-            padding: 10px;
-            background: #28a745;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        .toggle-kb.disabled {
-            background: #6c757d;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SRE Knowledge Assistant</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --primary: #6366f1;
+      --primary-dark: #4f46e5;
+      --secondary: #8b5cf6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --dark: #1e293b;
+      --light: #f8fafc;
+      --border: #e2e8f0;
+      --text: #334155;
+      --text-light: #64748b;
+    }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+      color: var(--text);
+    }
+    .container {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      gap: 20px;
+      height: calc(100vh - 40px);
+    }
+    .sidebar {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--primary);
+    }
+    .logo-icon {
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+    }
+    .nav-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .nav-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-light);
+      margin-bottom: 8px;
+    }
+    .nav-btn {
+      padding: 12px 16px;
+      background: transparent;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      text-align: left;
+      transition: all 0.2s;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .nav-btn:hover {
+      background: var(--light);
+      transform: translateX(4px);
+    }
+    .nav-btn.active {
+      background: var(--primary);
+      color: white;
+    }
+    .nav-icon {
+      font-size: 18px;
+    }
+    .main-content {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      margin-bottom: 32px;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 24px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--dark);
+      margin-bottom: 8px;
+    }
+    .header p {
+      color: var(--text-light);
+      font-size: 14px;
+    }
+    .view {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .view.active {
+      display: flex;
+    }
+    #clarifyStep {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    }
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background: var(--light);
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    .message {
+      padding: 16px 20px;
+      border-radius: 12px;
+      max-width: 85%;
+      animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .message.user {
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: white;
+      margin-left: auto;
+      border-bottom-right-radius: 4px;
+    }
+    .message.assistant {
+      background: white;
+      border: 2px solid var(--border);
+      margin-right: auto;
+      border-bottom-left-radius: 4px;
+    }
+    .message-content {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      line-height: 1.6;
+    }
+    .message-sources {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(0, 0, 0, 0.1);
+      font-size: 12px;
+      color: var(--text-light);
+    }
+    .input-container {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 16px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      font-size: 15px;
+      font-family: inherit;
+      resize: none;
+      min-height: 56px;
+      max-height: 150px;
+      transition: border-color 0.2s;
+    }
+    .chat-input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .btn {
+      padding: 16px 24px;
+      border: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: white;
+    }
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.3);
+    }
+    .btn-secondary {
+      background: white;
+      border: 2px solid var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--light);
+    }
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .doc-creation-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .step-indicator {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--light);
+      border-radius: 12px;
+    }
+    .step {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-number {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: white;
+      border: 2px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .step.active .step-number {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+    }
+    .step.completed .step-number {
+      background: var(--success);
+      border-color: var(--success);
+      color: white;
+    }
+    .step-label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-light);
+    }
+    .step.active .step-label {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .form-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .form-input,
+    .form-select,
+    .form-textarea {
+      padding: 12px 16px;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+    .form-input:focus,
+    .form-select:focus,
+    .form-textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .form-textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+    .card {
+      padding: 20px;
+      background: white;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+    }
+    .card-header {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: var(--dark);
+    }
+    .right-sidebar {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .kb-section {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--dark);
+      margin-bottom: 8px;
+    }
+    .file-upload {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      width: 100%;
+    }
+    .file-upload input[type=file] {
+      position: absolute;
+      left: -9999px;
+    }
+    .file-upload-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      background: var(--light);
+      color: var(--text);
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .file-upload-label:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: rgba(99, 102, 241, 0.05);
+    }
+    .document-item {
+      padding: 12px;
+      background: var(--light);
+      border-radius: 10px;
+      border-left: 3px solid var(--primary);
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .document-item:hover {
+      background: rgba(99, 102, 241, 0.1);
+      transform: translateX(4px);
+    }
+    .document-item.selected {
+      background: rgba(99, 102, 241, 0.15);
+      border-left-color: var(--secondary);
+    }
+    .document-info { flex: 1; }
+    .document-name {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--dark);
+      margin-bottom: 4px;
+    }
+    .document-meta {
+      font-size: 11px;
+      color: var(--text-light);
+    }
+    .delete-btn {
+      padding: 6px 10px;
+      background: var(--danger);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .delete-btn:hover {
+      background: #dc2626;
+      transform: scale(1.05);
+    }
+    .provider-select {
+      padding: 10px 12px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      background: white;
+      transition: border-color 0.2s;
+    }
+    .provider-select:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .toggle-kb {
+      padding: 10px 16px;
+      background: var(--light);
+      border: 2px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    .toggle-kb.active {
+      background: var(--success);
+      border-color: var(--success);
+      color: white;
+    }
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: var(--text-light);
+    }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track {
+      background: var(--light);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-light);
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <h2>📚 Knowledge Base</h2>
-            
-            <div class="upload-section">
-                <div class="file-input-wrapper">
-                    <input type="file" id="fileInput" accept=".txt">
-                    <label for="fileInput" class="file-input-label">
-                        Choose File (.txt)
-                    </label>
-                </div>
-                <button class="upload-btn" id="uploadBtn" disabled>Upload Document</button>
-            </div>
+  <div class="container">
+    <!-- Left Sidebar -->
+    <div class="sidebar">
+      <div class="logo">
+        <div class="logo-icon">🛠️</div>
+        <span>SRE Assistant</span>
+      </div>
 
-            <div class="documents-list" id="documentsList">
-                <div class="loading">No documents uploaded</div>
-            </div>
-        </div>
+      <div class="nav-section">
+        <div class="nav-title">Main</div>
+        <button class="nav-btn active" onclick="switchView('chat')">
+          <span class="nav-icon">💬</span>
+          <span>Chat</span>
+        </button>
+        <button class="nav-btn" onclick="switchView('create-doc')">
+          <span class="nav-icon">📝</span>
+          <span>Create Document</span>
+        </button>
+      </div>
 
-        <!-- Main Chat Area -->
-        <div class="main-content">
-            <div class="chat-header">
-                <h1>🤖 AI Chat Assistant</h1>
-                <div>
-                    <button class="toggle-kb" id="toggleKB">KB: OFF</button>
-                    <select class="provider-select" id="providerSelect">
-                        <option value="">Loading...</option>
-                    </select>
-                </div>
-            </div>
-
-            <div class="chat-container">
-                <div class="chat-messages" id="chatMessages">
-                    <div class="message assistant">
-                        <div class="message-content">
-                            👋 Hello! I'm your AI assistant. Upload documents to the Knowledge Base and I can answer questions about them, or just chat normally!
-                        </div>
-                    </div>
-                </div>
-
-                <div class="input-container">
-                    <input 
-                        type="text" 
-                        class="chat-input" 
-                        id="chatInput" 
-                        placeholder="Ask me anything..."
-                    >
-                    <button class="send-btn" id="sendBtn">Send</button>
-                </div>
-            </div>
-        </div>
+      <div class="nav-section">
+        <div class="nav-title">Settings</div>
+        <label class="form-label" for="providerSelect">LLM Provider</label>
+        <select class="provider-select" id="providerSelect">
+          <option value="">Loading...</option>
+        </select>
+      </div>
     </div>
 
-    <script>
-        let selectedDocuments = new Set();
-        let useKnowledgeBase = false;
-        let currentProvider = 'gemini';
+    <!-- Main Content Area -->
+    <div class="main-content">
+      <!-- Chat View -->
+      <div id="chatView" class="view active">
+        <div class="header">
+          <h1>💬 Knowledge Base Chat</h1>
+          <p>Ask questions about your infrastructure and documentation</p>
+        </div>
 
-        // File input handling
-        const fileInput = document.getElementById('fileInput');
-        const uploadBtn = document.getElementById('uploadBtn');
+        <div class="chat-container">
+          <div class="chat-messages" id="chatMessages">
+            <div class="message assistant">
+              <div class="message-content">
+👋 Hello! I'm your SRE assistant. Upload documents to the Knowledge Base and I can answer questions about them, or just chat normally!
+              </div>
+            </div>
+          </div>
+          <div class="input-container">
+            <textarea
+              class="chat-input"
+              id="chatInput"
+              placeholder="Ask me anything..."
+              rows="1"
+            ></textarea>
+            <button class="btn btn-primary" id="sendBtn">
+              <span>Send</span>
+              <span>→</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
-        fileInput.addEventListener('change', (e) => {
-            uploadBtn.disabled = !e.target.files.length;
+      <!-- Create Document View -->
+      <div id="createDocView" class="view">
+        <div class="header">
+          <h1>📝 Create SRE Document</h1>
+          <p>Interactive document creation with AI guidance</p>
+        </div>
+
+        <div class="doc-creation-flow">
+          <!-- Step Indicator -->
+          <div class="step-indicator">
+            <div class="step active" id="step1">
+              <div class="step-number">1</div>
+              <div class="step-label">Setup</div>
+            </div>
+            <div class="step" id="step2">
+              <div class="step-number">2</div>
+              <div class="step-label">Clarify</div>
+            </div>
+            <div class="step" id="step3">
+              <div class="step-number">3</div>
+              <div class="step-label">Generate</div>
+            </div>
+          </div>
+
+          <!-- Step 1 -->
+          <div id="setupStep" class="doc-step">
+            <div class="form-group">
+              <label class="form-label" for="docType">Document Type</label>
+              <select class="form-select" id="docType">
+                <option value="runbook">Runbook</option>
+                <option value="troubleshooting">Troubleshooting Guide</option>
+                <option value="architecture">Architecture Documentation</option>
+                <option value="incident_report">Incident Report</option>
+                <option value="sop">Standard Operating Procedure (SOP)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="docTitle">Document Title</label>
+              <input
+                type="text"
+                class="form-input"
+                id="docTitle"
+                placeholder="e.g., Database Failover Procedure"
+              >
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="docPrompt">Describe What You Need</label>
+              <textarea
+                class="form-textarea"
+                id="docPrompt"
+                placeholder="Describe the document you want to create. Be as specific as possible about the problem, system, or process."
+              ></textarea>
+            </div>
+
+            <button class="btn btn-primary" type="button" onclick="startDocumentCreation()">
+              <span>Start Creation</span>
+              <span>→</span>
+            </button>
+          </div>
+
+          <!-- Step 2 -->
+          <div id="clarifyStep" class="doc-step" style="display: none;">
+            <div class="card">
+              <div class="card-header">AI Questions</div>
+              <div id="questionsContent"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="clarificationAnswer">Your Answers</label>
+              <textarea
+                class="form-textarea"
+                id="clarificationAnswer"
+                placeholder="Answer the questions above..."
+              ></textarea>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+              <button class="btn btn-secondary" type="button" onclick="cancelDocCreation()">Cancel</button>
+              <button class="btn btn-primary" type="button" onclick="submitClarification()">
+                <span>Submit Answers</span>
+                <span>→</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div id="generateStep" class="doc-step" style="display: none;">
+            <div class="card">
+              <div class="card-header">Ready to Generate</div>
+              <p style="color: var(--text-light); margin-bottom: 20px;">
+                The AI has enough information to create your document.
+              </p>
+
+              <div style="display: flex; gap: 12px;">
+                <button class="btn btn-secondary" type="button" onclick="cancelDocCreation()">Cancel</button>
+                <button class="btn btn-primary" type="button" onclick="generateFinalDocument()">
+                  <span>Generate Document</span>
+                  <span>✨</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Result -->
+          <div id="resultStep" class="doc-step" style="display: none;">
+            <div class="card">
+              <div class="card-header">Generated Document</div>
+              <div
+                id="generatedDocContent"
+                style="white-space: pre-wrap; line-height: 1.8;"
+              ></div>
+            </div>
+
+            <button class="btn btn-primary" type="button" onclick="resetDocCreation()">
+              <span>Create Another Document</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Sidebar -->
+    <div class="right-sidebar">
+      <div class="kb-section">
+        <div class="section-title">Knowledge Base</div>
+
+        <button class="toggle-kb" id="toggleKB" type="button" onclick="toggleKnowledgeBase()">
+          KB: OFF
+        </button>
+
+        <div class="file-upload">
+          <input type="file" id="fileInput" accept=".txt">
+          <label for="fileInput" class="file-upload-label">
+            <span>📄</span>
+            <span>Upload Document</span>
+          </label>
+        </div>
+
+        <button
+          class="btn btn-secondary"
+          id="uploadBtn"
+          disabled
+          style="width: 100%;"
+          type="button"
+          onclick="uploadDocument()"
+        >
+          Upload
+        </button>
+      </div>
+
+      <div class="kb-section">
+        <div class="section-title">Documents</div>
+        <div id="documentsList">
+          <div class="loading">No documents uploaded</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let selectedDocuments = new Set();
+    let useKnowledgeBase = false;
+    let currentProvider = 'gemini';
+    let docCreationSession = null;
+
+    function switchView(viewName) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+
+      if (viewName === 'chat') {
+        document.getElementById('chatView').classList.add('active');
+        document.querySelector('.nav-btn').classList.add('active');
+      } else if (viewName === 'create-doc') {
+        document.getElementById('createDocView').classList.add('active');
+        document.querySelectorAll('.nav-btn')[1].classList.add('active');
+      }
+    }
+
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+
+    fileInput.addEventListener('change', (e) => {
+      uploadBtn.disabled = !e.target.files.length;
+    });
+
+    async function uploadDocument() {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading...';
+
+      try {
+        const response = await fetch('/api/documents/upload', {
+          method: 'POST',
+          body: formData
         });
 
-        uploadBtn.addEventListener('click', async () => {
-            const file = fileInput.files[0];
-            if (!file) return;
+        if (response.ok) {
+          const result = await response.json();
+          addMessage(`✅ ${result.message}`, 'assistant');
+          await loadDocuments();
+          fileInput.value = '';
+        } else {
+          const error = await response.json();
+          addMessage(`❌ Upload failed: ${error.detail}`, 'assistant');
+        }
+      } catch (error) {
+        addMessage(`❌ Upload error: ${error.message}`, 'assistant');
+      }
 
-            const formData = new FormData();
-            formData.append('file', file);
+      uploadBtn.textContent = 'Upload';
+      uploadBtn.disabled = false;
+    }
 
-            uploadBtn.disabled = true;
-            uploadBtn.textContent = 'Uploading...';
+    async function loadDocuments() {
+      try {
+        const response = await fetch('/api/documents/');
+        const data = await response.json();
 
-            try {
-                const response = await fetch('/api/documents/upload', {
-                    method: 'POST',
-                    body: formData
-                });
+        const list = document.getElementById('documentsList');
 
-                if (response.ok) {
-                    const result = await response.json();
-                    addMessage(`✅ ${result.message}`, 'assistant');
-                    await loadDocuments();
-                    fileInput.value = '';
-                } else {
-                    const error = await response.json();
-                    addMessage(`❌ Upload failed: ${error.detail}`, 'assistant');
-                }
-            } catch (error) {
-                addMessage(`❌ Upload error: ${error.message}`, 'assistant');
+        if (!data.documents || data.documents.length === 0) {
+          list.innerHTML = '<div class="loading">No documents uploaded</div>';
+          return;
+        }
+
+        list.innerHTML = data.documents.map(doc => `
+          <div class="document-item" data-id="${doc.id}">
+            <div class="document-info">
+              <div class="document-name">${doc.filename}</div>
+              <div class="document-meta">
+                ${doc.chunks} chunks • ${(doc.size / 1024).toFixed(1)} KB
+              </div>
+            </div>
+            <button class="delete-btn" type="button" onclick="deleteDocument('${doc.id}', event)">×</button>
+          </div>
+        `).join('');
+
+        document.querySelectorAll('.document-item').forEach(item => {
+          item.addEventListener('click', () => {
+            const docId = item.dataset.id;
+            if (selectedDocuments.has(docId)) {
+              selectedDocuments.delete(docId);
+              item.classList.remove('selected');
+            } else {
+              selectedDocuments.add(docId);
+              item.classList.add('selected');
             }
+          });
+        });
+      } catch (error) {
+        console.error('Failed to load documents:', error);
+      }
+    }
 
-            uploadBtn.textContent = 'Upload Document';
+    async function deleteDocument(docId, event) {
+      event.stopPropagation();
+
+      if (!confirm('Delete this document?')) return;
+
+      try {
+        const response = await fetch(`/api/documents/${docId}`, {
+          method: 'DELETE'
         });
 
-        // Load documents
-        async function loadDocuments() {
-            try {
-                const response = await fetch('/api/documents/');
-                const data = await response.json();
-
-                const list = document.getElementById('documentsList');
-                
-                if (data.documents.length === 0) {
-                    list.innerHTML = '<div class="loading">No documents uploaded</div>';
-                    return;
-                }
-
-                list.innerHTML = data.documents.map(doc => `
-                    <div class="document-item" data-id="${doc.id}">
-                        <button class="delete-btn" onclick="deleteDocument('${doc.id}', event)">×</button>
-                        <div class="document-name">${doc.filename}</div>
-                        <div class="document-meta">${doc.chunks} chunks • ${(doc.size / 1024).toFixed(1)} KB</div>
-                    </div>
-                `).join('');
-
-                // Add click handlers
-                document.querySelectorAll('.document-item').forEach(item => {
-                    item.addEventListener('click', () => {
-                        const docId = item.dataset.id;
-                        if (selectedDocuments.has(docId)) {
-                            selectedDocuments.delete(docId);
-                            item.classList.remove('selected');
-                        } else {
-                            selectedDocuments.add(docId);
-                            item.classList.add('selected');
-                        }
-                    });
-                });
-            } catch (error) {
-                console.error('Failed to load documents:', error);
-            }
+        if (response.ok) {
+          selectedDocuments.delete(docId);
+          await loadDocuments();
+          addMessage('🗑️ Document deleted', 'assistant');
         }
+      } catch (error) {
+        addMessage(`❌ Delete failed: ${error.message}`, 'assistant');
+      }
+    }
 
-        // Delete document
-        async function deleteDocument(docId, event) {
-            event.stopPropagation();
-            
-            if (!confirm('Delete this document?')) return;
+    function toggleKnowledgeBase() {
+      useKnowledgeBase = !useKnowledgeBase;
+      const btn = document.getElementById('toggleKB');
+      btn.textContent = useKnowledgeBase ? 'KB: ON' : 'KB: OFF';
+      btn.classList.toggle('active');
+    }
 
-            try {
-                const response = await fetch(`/api/documents/${docId}`, {
-                    method: 'DELETE'
-                });
+    async function loadProviders() {
+      try {
+        const response = await fetch('/api/llm/providers');
+        const data = await response.json();
 
-                if (response.ok) {
-                    selectedDocuments.delete(docId);
-                    await loadDocuments();
-                    addMessage('🗑️ Document deleted', 'assistant');
-                }
-            } catch (error) {
-                addMessage(`❌ Delete failed: ${error.message}`, 'assistant');
-            }
+        const select = document.getElementById('providerSelect');
+        select.innerHTML = data.providers
+          .filter(p => p.state === 'healthy')
+          .map(p => `<option value="${p.provider}">${p.provider}</option>`)
+          .join('');
+
+        if (select.options.length > 0) {
+          currentProvider = select.value;
         }
+      } catch (error) {
+        console.error('Failed to load providers:', error);
+      }
+    }
 
-        // Toggle KB
-        document.getElementById('toggleKB').addEventListener('click', (e) => {
-            useKnowledgeBase = !useKnowledgeBase;
-            e.target.textContent = useKnowledgeBase ? 'KB: ON' : 'KB: OFF';
-            e.target.classList.toggle('disabled');
+    document.getElementById('providerSelect').addEventListener('change', (e) => {
+      currentProvider = e.target.value;
+    });
+
+    function addMessage(content, role, sources = null) {
+      const messagesDiv = document.getElementById('chatMessages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${role}`;
+
+      let html = `<div class="message-content">${content}</div>`;
+
+      if (sources && sources.length > 0) {
+        html += `<div class="message-sources">📄 Sources: ${sources.map(s => s.filename).join(', ')}</div>`;
+      }
+
+      messageDiv.innerHTML = html;
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('chatInput');
+      const message = input.value.trim();
+      if (!message) return;
+
+      addMessage(message, 'user');
+      input.value = '';
+
+      const sendBtn = document.getElementById('sendBtn');
+      sendBtn.disabled = true;
+
+      try {
+        if (useKnowledgeBase) {
+          const response = await fetch('/api/documents/query', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              question: message,
+              provider: currentProvider,
+              doc_ids: selectedDocuments.size > 0 ? Array.from(selectedDocuments) : null
+            })
+          });
+
+          const data = await response.json();
+          addMessage(data.answer, 'assistant', data.sources);
+        } else {
+          const response = await fetch('/api/llm/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: message,
+              provider: currentProvider,
+              temperature: 0.7
+            })
+          });
+
+          const data = await response.json();
+          addMessage(data.content, 'assistant');
+        }
+      } catch (error) {
+        addMessage(`❌ Error: ${error.message}`, 'assistant');
+      }
+
+      sendBtn.disabled = false;
+    }
+
+    document.getElementById('sendBtn').addEventListener('click', sendMessage);
+    document.getElementById('chatInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    document.getElementById('chatInput').addEventListener('input', function () {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+
+    async function startDocumentCreation() {
+      const docType = document.getElementById('docType').value;
+      const title = document.getElementById('docTitle').value.trim();
+      const prompt = document.getElementById('docPrompt').value.trim();
+
+      if (!title || !prompt) {
+        alert('Please fill in all fields');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/documents/create-document/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            document_type: docType,
+            title: title,
+            initial_prompt: prompt,
+            provider: currentProvider,
+            doc_ids: selectedDocuments.size > 0 ? Array.from(selectedDocuments) : null
+          })
         });
 
-        // Load providers
-        async function loadProviders() {
-            try {
-                const response = await fetch('/api/llm/providers');
-                const data = await response.json();
-                
-                const select = document.getElementById('providerSelect');
-                select.innerHTML = data.providers
-                    .filter(p => p.state === 'healthy')
-                    .map(p => `<option value="${p.provider}">${p.provider}</option>`)
-                    .join('');
-                
-                if (select.options.length > 0) {
-                    currentProvider = select.value;
-                }
-            } catch (error) {
-                console.error('Failed to load providers:', error);
-            }
-        }
+        const data = await response.json();
 
-        document.getElementById('providerSelect').addEventListener('change', (e) => {
-            currentProvider = e.target.value;
+        if (response.ok) {
+          docCreationSession = data.session_id;
+          document.getElementById('questionsContent').innerHTML =
+            '<pre style="white-space: pre-wrap; line-height: 1.6;">' +
+            data.questions +
+            '</pre>';
+
+          document.getElementById('setupStep').style.display = 'none';
+          document.getElementById('clarifyStep').style.display = 'block';
+          updateStepIndicator(2);
+        } else {
+          alert('Error: ' + data.detail);
+        }
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
+
+    async function submitClarification() {
+      const answer = document.getElementById('clarificationAnswer').value.trim();
+      if (!answer) {
+        alert('Please provide answers to the questions');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/documents/create-document/clarify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: docCreationSession,
+            answer: answer,
+            provider: currentProvider
+          })
         });
 
-        // Chat functionality
-        function addMessage(content, role, sources = null) {
-            const messagesDiv = document.getElementById('chatMessages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}`;
-            
-            let html = `<div class="message-content">${content}</div>`;
-            
-            if (sources && sources.length > 0) {
-                html += `<div class="message-sources">📄 Sources: ${sources.map(s => s.filename).join(', ')}</div>`;
-            }
-            
-            messageDiv.innerHTML = html;
-            messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        const data = await response.json();
+
+        if (data.status === 'ready_to_generate') {
+          document.getElementById('clarifyStep').style.display = 'none';
+          document.getElementById('generateStep').style.display = 'block';
+          updateStepIndicator(3);
+        } else {
+          document.getElementById('questionsContent').innerHTML =
+            '<pre style="white-space: pre-wrap; line-height: 1.6;">' +
+            data.questions +
+            '</pre>';
+          document.getElementById('clarificationAnswer').value = '';
         }
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
 
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            
-            if (!message) return;
+    async function generateFinalDocument() {
+      try {
+        const response = await fetch(
+          `/api/documents/create-document/generate?session_id=${docCreationSession}&provider=${currentProvider}`,
+          { method: 'POST' }
+        );
 
-            addMessage(message, 'user');
-            input.value = '';
+        const data = await response.json();
 
-            const sendBtn = document.getElementById('sendBtn');
-            sendBtn.disabled = true;
-
-            try {
-                if (useKnowledgeBase) {
-                    // Query with KB
-                    const response = await fetch('/api/documents/query', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            question: message,
-                            provider: currentProvider,
-                            doc_ids: selectedDocuments.size > 0 ? Array.from(selectedDocuments) : null
-                        })
-                    });
-
-                    const data = await response.json();
-                    addMessage(data.answer, 'assistant', data.sources);
-                } else {
-                    // Normal chat
-                    const response = await fetch('/api/llm/generate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            prompt: message,
-                            provider: currentProvider,
-                            temperature: 0.7
-                        })
-                    });
-
-                    const data = await response.json();
-                    addMessage(data.content, 'assistant');
-                }
-            } catch (error) {
-                addMessage(`❌ Error: ${error.message}`, 'assistant');
-            }
-
-            sendBtn.disabled = false;
+        if (response.ok) {
+          document.getElementById('generatedDocContent').textContent = data.document;
+          document.getElementById('generateStep').style.display = 'none';
+          document.getElementById('resultStep').style.display = 'block';
+          updateStepIndicator(3, true);
+          await loadDocuments();
+        } else {
+          alert('Error: ' + data.detail);
         }
+      } catch (error) {
+        alert('Error: ' + error.message);
+      }
+    }
 
-        document.getElementById('sendBtn').addEventListener('click', sendMessage);
-        document.getElementById('chatInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
+    function cancelDocCreation() {
+      if (docCreationSession) {
+        fetch(`/api/documents/create-document/session/${docCreationSession}`, {
+          method: 'DELETE'
         });
+      }
+      resetDocCreation();
+    }
 
-        // Initialize
-        loadProviders();
-        loadDocuments();
-    </script>
+    function resetDocCreation() {
+      docCreationSession = null;
+      document.getElementById('docTitle').value = '';
+      document.getElementById('docPrompt').value = '';
+      document.getElementById('clarificationAnswer').value = '';
+
+      document.getElementById('setupStep').style.display = 'block';
+      document.getElementById('clarifyStep').style.display = 'none';
+      document.getElementById('generateStep').style.display = 'none';
+      document.getElementById('resultStep').style.display = 'none';
+
+      updateStepIndicator(1);
+    }
+
+    function updateStepIndicator(activeStep, completed = false) {
+      for (let i = 1; i <= 3; i++) {
+        const step = document.getElementById('step' + i);
+        step.classList.remove('active', 'completed');
+
+        if (i < activeStep) {
+          step.classList.add('completed');
+        } else if (i === activeStep) {
+          step.classList.add(completed ? 'completed' : 'active');
+        }
+      }
+    }
+
+    // Initial data load
+    loadProviders();
+    loadDocuments();
+  </script>
 </body>
 </html>

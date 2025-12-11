@@ -10,6 +10,9 @@ A FastAPI application that provides a unified interface for LLM providers, manag
 - Health check endpoint
 - WebSocket support for real-time updates
 - Streaming support for LLM responses
+- **Semantic search with embeddings** - Find documents by meaning, not just keywords
+- **RAG (Retrieval-Augmented Generation)** - Answer questions using your knowledge base
+- **Redis persistence** - Store documents and embeddings for fast retrieval
 
 ## Prerequisites
 

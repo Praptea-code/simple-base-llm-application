@@ -803,6 +803,142 @@
       }
     }
 
+    async function viewDocument(docId, event) {
+    event.stopPropagation();
+    
+    try {
+      const response = await fetch(`/api/documents/${docId}`);
+      const doc = await response.json();
+      
+      // Create a modal/popup to show document
+      const modal = document.createElement('div');
+      modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        padding: 20px;
+      `;
+      
+      modal.innerHTML = `
+        <div style="
+          background: white;
+          border-radius: 16px;
+          max-width: 900px;
+          max-height: 90vh;
+          width: 100%;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        ">
+          <!-- Header -->
+          <div style="
+            padding: 24px;
+            border-bottom: 2px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          ">
+            <div>
+              <h2 style="margin: 0; color: var(--dark);">${doc.filename}</h2>
+              <p style="margin: 8px 0 0 0; color: var(--text-light); font-size: 14px;">
+                ${doc.chunks} chunks • ${(doc.size / 1024).toFixed(1)} KB • ${doc.uploaded_at}
+              </p>
+            </div>
+            <button onclick="this.closest('.modal-overlay').remove()" style="
+              background: none;
+              border: none;
+              font-size: 32px;
+              cursor: pointer;
+              color: var(--text-light);
+              width: 40px;
+              height: 40px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 8px;
+            ">×</button>
+          </div>
+          
+          <!-- Content -->
+          <div style="
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+          ">
+            <pre style="
+              white-space: pre-wrap;
+              word-wrap: break-word;
+              font-family: 'Monaco', 'Menlo', monospace;
+              font-size: 14px;
+              line-height: 1.8;
+              margin: 0;
+              color: var(--text);
+            ">${doc.content}</pre>
+          </div>
+          
+          <!-- Footer -->
+          <div style="
+            padding: 16px 24px;
+            border-top: 2px solid var(--border);
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+          ">
+            <button onclick="copyToClipboard(\`${doc.content.replace(/`/g, '\\`')}\`)" class="btn btn-secondary">
+              📋 Copy
+            </button>
+            <button onclick="downloadDocument('${doc.filename}', \`${doc.content.replace(/`/g, '\\`')}\`)" class="btn btn-primary">
+              ⬇️ Download
+            </button>
+          </div>
+        </div>
+      `;
+      
+      modal.className = 'modal-overlay';
+      document.body.appendChild(modal);
+      
+      // Close on background click
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          modal.remove();
+        }
+      });
+      
+    } catch (error) {
+      alert('Error loading document: ' + error.message);
+    }
+  }
+
+  // Helper function to copy to clipboard
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+      alert('✅ Document copied to clipboard!');
+    }).catch(err => {
+      alert('❌ Failed to copy: ' + err);
+    });
+  }
+
+  // Helper function to download document
+  function downloadDocument(filename, content) {
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
     async function deleteDocument(docId, event) {
       event.stopPropagation();
 

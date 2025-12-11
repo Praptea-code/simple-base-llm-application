@@ -1,4 +1,4 @@
-"""Document management and RAG (Retrieval-Augmented Generation) system with Redis"""
+"""Document management and RAG (Retrieval-Augmented Generation) system with Redis and Semantic Search"""
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -12,6 +12,7 @@ from enum import Enum
 
 from fastapi_app.config import settings
 from fastapi_app.logging_config import get_logger
+from fastapi_app.embeddings import embedding_service
 
 logger = get_logger(__name__)
 
@@ -19,7 +20,7 @@ router = APIRouter()
 
 
 class RedisDocumentStore:
-    """Redis-based persistent document storage"""
+    """Redis-based persistent document storage with semantic search"""
     
     def __init__(self):
         self.redis_url = getattr(settings, 'redis_url', 'redis://localhost:6379')
@@ -60,12 +61,17 @@ class RedisDocumentStore:
         return chunks
     
     async def store_document(self, filename: str, content: str):
-        """Store document and its chunks in Redis"""
+        """Store document and its chunks with embeddings in Redis"""
         if not self.redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")
         
         doc_id = str(uuid.uuid4())[:8]
         chunks = self.chunk_text(content)
+        
+        logger.info(f"Generating embeddings for {len(chunks)} chunks...")
+        
+        # Generate embeddings for all chunks in batch
+        embeddings = embedding_service.generate_embeddings(chunks)
         
         doc_data = {
             "id": doc_id,
@@ -82,12 +88,14 @@ class RedisDocumentStore:
             ex=86400 * 30  # 30 days
         )
         
-        for i, chunk in enumerate(chunks):
+        # Store chunks with their embeddings
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             chunk_data = {
                 "doc_id": doc_id,
                 "filename": filename,
                 "chunk_index": i,
-                "content": chunk
+                "content": chunk,
+                "embedding": embedding  # Store the embedding vector
             }
             await self.redis_client.set(
                 f"{self.chunk_prefix}{doc_id}:{i}",
@@ -96,7 +104,7 @@ class RedisDocumentStore:
             )
         
         await self.redis_client.sadd(self.doc_list_key, doc_id)
-        logger.info(f"Stored document {doc_id} with {len(chunks)} chunks")
+        logger.info(f"Stored document {doc_id} with {len(chunks)} chunks and embeddings")
         
         return {
             "doc_id": doc_id,
@@ -154,15 +162,29 @@ class RedisDocumentStore:
         logger.info(f"Deleted document {doc_id}")
         return True
     
-    async def search_chunks(self, query: str, doc_ids: Optional[List[str]] = None, top_k: int = 5):
-        """Search for relevant chunks"""
+    async def semantic_search(self, query: str, doc_ids: Optional[List[str]] = None, top_k: int = 5):
+        """
+        Perform semantic search using embeddings and cosine similarity
+        
+        Args:
+            query: Search query text
+            doc_ids: Optional list of document IDs to search within
+            top_k: Number of top results to return
+            
+        Returns:
+            List of relevant chunks sorted by semantic similarity
+        """
         if not self.redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")
         
+        # Generate embedding for the query
+        logger.info(f"Generating embedding for query: {query[:50]}...")
+        query_embedding = embedding_service.generate_embedding(query)
+        
         search_ids = doc_ids if doc_ids else list(await self.redis_client.smembers(self.doc_list_key))
-        query_words = set(query.lower().split())
         scored_chunks = []
         
+        # Search through all chunks and calculate similarity
         for doc_id in search_ids:
             doc_data = await self.get_document(doc_id)
             if not doc_data:
@@ -176,19 +198,58 @@ class RedisDocumentStore:
                     continue
                 
                 chunk_data = json.loads(chunk_json)
-                chunk_lower = chunk_data["content"].lower()
                 
-                chunk_words = set(chunk_lower.split())
-                overlap = len(query_words & chunk_words)
-                
-                if query.lower() in chunk_lower:
-                    overlap += 5
-                
-                if overlap > 0:
-                    scored_chunks.append({**chunk_data, "score": overlap})
+                # Calculate cosine similarity between query and chunk embeddings
+                if "embedding" in chunk_data:
+                    similarity = embedding_service.cosine_similarity(
+                        query_embedding,
+                        chunk_data["embedding"]
+                    )
+                    
+                    scored_chunks.append({
+                        "doc_id": chunk_data["doc_id"],
+                        "filename": chunk_data["filename"],
+                        "chunk_index": chunk_data["chunk_index"],
+                        "content": chunk_data["content"],
+                        "score": similarity
+                    })
         
+        # Sort by similarity score (highest first)
         scored_chunks.sort(key=lambda x: x["score"], reverse=True)
+        
+        logger.info(f"Semantic search found {len(scored_chunks)} chunks, returning top {top_k}")
         return scored_chunks[:top_k]
+    
+    async def search_chunks(self, query: str, doc_ids: Optional[List[str]] = None, top_k: int = 5):
+        """
+        Hybrid search: combines keyword matching with semantic search
+        
+        This method uses semantic search as the primary method, then boosts
+        results that also contain exact keyword matches.
+        """
+        # Get semantic search results
+        semantic_results = await self.semantic_search(query, doc_ids, top_k * 2)
+        
+        # Boost scores for keyword matches
+        query_words = set(query.lower().split())
+        
+        for chunk in semantic_results:
+            chunk_lower = chunk["content"].lower()
+            chunk_words = set(chunk_lower.split())
+            overlap = len(query_words & chunk_words)
+            
+            # Boost score if there's keyword overlap
+            if overlap > 0:
+                chunk["score"] += overlap * 0.05  # Small boost for keyword matches
+            
+            # Extra boost for exact phrase match
+            if query.lower() in chunk_lower:
+                chunk["score"] += 0.1
+        
+        # Re-sort after boosting
+        semantic_results.sort(key=lambda x: x["score"], reverse=True)
+        
+        return semantic_results[:top_k]
 
 
 # Global instance
@@ -223,11 +284,12 @@ class QueryRequest(BaseModel):
     provider: str = Field(default="gemini", description="LLM provider")
     doc_ids: Optional[List[str]] = Field(default=None, description="Document IDs")
     max_context_length: int = Field(default=4000, description="Max context length")
+    use_semantic_search: bool = Field(default=True, description="Use semantic search (True) or keyword search (False)")
 
 
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    """Upload document to Redis knowledge base"""
+    """Upload document to Redis knowledge base with automatic embedding generation"""
     if not file.filename.endswith(".txt"):
         raise HTTPException(status_code=400, detail="Only .txt files supported")
     
@@ -237,7 +299,7 @@ async def upload_document(file: UploadFile = File(...)):
     result = await document_store.store_document(file.filename, text_content)
     
     return JSONResponse(content={
-        "message": f"{file.filename} uploaded successfully",
+        "message": f"{file.filename} uploaded successfully with embeddings",
         **result
     })
 
@@ -286,20 +348,23 @@ async def delete_document(doc_id: str):
 
 @router.post("/query")
 async def query_documents(request: QueryRequest):
-    """Query documents using RAG"""
+    """Query documents using RAG with semantic search"""
     documents = await document_store.list_documents()
     
     if not documents:
         raise HTTPException(status_code=400, detail="No documents uploaded")
     
     search_docs = request.doc_ids if request.doc_ids else None
+    
+    # Use semantic search or fallback to keyword search
     relevant_chunks = await document_store.search_chunks(request.question, search_docs, top_k=5)
     
     if not relevant_chunks:
         return JSONResponse(content={
             "answer": "No relevant information found in documents",
             "sources": [],
-            "context_used": ""
+            "context_used": "",
+            "search_method": "semantic" if request.use_semantic_search else "keyword"
         })
     
     context_parts = []
@@ -309,10 +374,10 @@ async def query_documents(request: QueryRequest):
     for chunk in relevant_chunks:
         if total_length + len(chunk["content"]) > request.max_context_length:
             break
-        context_parts.append(f"[From {chunk['filename']}]:\n{chunk['content']}")
+        context_parts.append(f"[From {chunk['filename']} - Relevance: {chunk['score']:.3f}]:\n{chunk['content']}")
         total_length += len(chunk["content"])
         
-        source_info = {"filename": chunk["filename"], "doc_id": chunk["doc_id"]}
+        source_info = {"filename": chunk["filename"], "doc_id": chunk["doc_id"], "relevance": round(chunk["score"], 3)}
         if source_info not in sources:
             sources.append(source_info)
     
@@ -346,7 +411,8 @@ Provide a clear answer based only on the context above."""
             "answer": answer,
             "sources": sources,
             "chunks_used": len(context_parts),
-            "provider": request.provider
+            "provider": request.provider,
+            "search_method": "semantic"
         }
         
     except HTTPException:
@@ -363,26 +429,31 @@ Provide a clear answer based only on the context above."""
 @router.get("/search/{query}")
 async def search_documents(
     query: str,
-    top_k: int = Query(default=5, ge=1, le=20)
+    top_k: int = Query(default=5, ge=1, le=20),
+    semantic: bool = Query(default=True, description="Use semantic search")
 ):
-    """Search documents"""
+    """Search documents using semantic or keyword search"""
     documents = await document_store.list_documents()
     
     if not documents:
         raise HTTPException(status_code=400, detail="No documents uploaded")
     
-    results = await document_store.search_chunks(query, top_k=top_k)
+    if semantic:
+        results = await document_store.semantic_search(query, top_k=top_k)
+    else:
+        results = await document_store.search_chunks(query, top_k=top_k)
     
     return {
         "query": query,
         "results": results,
-        "total_found": len(results)
+        "total_found": len(results),
+        "search_method": "semantic" if semantic else "keyword"
     }
+
 @router.post("/create-document/start")
 async def start_document_creation(request: CreateDocumentRequest):
     """
-    Start an interactive document creation session.
-    The AI will ask clarifying questions before generating the document.
+    Start an interactive document creation session using semantic search
     """
     documents = await document_store.list_documents()
     
@@ -395,9 +466,9 @@ async def start_document_creation(request: CreateDocumentRequest):
     # Create session ID
     session_id = str(uuid.uuid4())[:12]
     
-    # Get relevant context from KB
+    # Get relevant context from KB using semantic search
     search_docs = request.doc_ids if request.doc_ids else None
-    relevant_chunks = await document_store.search_chunks(
+    relevant_chunks = await document_store.semantic_search(
         request.initial_prompt, 
         search_docs, 
         top_k=10
@@ -407,8 +478,8 @@ async def start_document_creation(request: CreateDocumentRequest):
     context_parts = []
     sources = []
     for chunk in relevant_chunks:
-        context_parts.append(f"[{chunk['filename']}]:\n{chunk['content']}")
-        source_info = {"filename": chunk["filename"], "doc_id": chunk["doc_id"]}
+        context_parts.append(f"[{chunk['filename']} - Relevance: {chunk['score']:.3f}]:\n{chunk['content']}")
+        source_info = {"filename": chunk["filename"], "doc_id": chunk["doc_id"], "relevance": round(chunk["score"], 3)}
         if source_info not in sources:
             sources.append(source_info)
     
@@ -417,7 +488,7 @@ async def start_document_creation(request: CreateDocumentRequest):
     # Create clarification prompt
     clarification_prompt = f"""You are an expert SRE/DevOps documentation assistant. A user wants to create a {request.document_type.value} document.
 
-KNOWLEDGE BASE CONTEXT:
+KNOWLEDGE BASE CONTEXT (Semantically Retrieved):
 {context}
 
 USER'S REQUEST:
@@ -482,7 +553,8 @@ MISSING: [List any critical information not found in the knowledge base]"""
             "status": "awaiting_clarification",
             "questions": clarification_response,
             "sources_available": sources,
-            "message": "Please answer the clarifying questions to proceed with document creation."
+            "message": "Please answer the clarifying questions to proceed with document creation.",
+            "search_method": "semantic"
         }
         
     except HTTPException:
@@ -493,10 +565,7 @@ MISSING: [List any critical information not found in the knowledge base]"""
 
 @router.post("/create-document/clarify")
 async def provide_clarification(request: ClarificationRequest):
-    """
-    Provide answers to clarifying questions.
-    The AI will determine if more questions are needed or if it can generate the document.
-    """
+    """Provide answers to clarifying questions"""
     if request.session_id not in document_sessions:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     
@@ -554,10 +623,7 @@ MISSING_FROM_KB: [List any critical information not in the knowledge base]"""
 
 @router.post("/create-document/generate")
 async def generate_document(session_id: str, provider: str = "gemini"):
-    """
-    Generate the final document based on the knowledge base and clarifications.
-    This will ONLY use information from the KB - no hallucinations.
-    """
+    """Generate the final document based on the knowledge base and clarifications"""
     if session_id not in document_sessions:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     
@@ -613,7 +679,7 @@ Generate the document now, following the format above."""
 ---
 
 **Knowledge Base Sources Used:**
-{chr(10).join(f"- {s['filename']}" for s in session['sources'])}
+{chr(10).join(f"- {s['filename']} (Relevance: {s.get('relevance', 'N/A')})" for s in session['sources'])}
 """
         
         # Save to document store
